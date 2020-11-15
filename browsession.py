@@ -4,11 +4,11 @@
 # Monitors and makes a backups of browser session.
 # \file		browsession.py
 # \version 	<see __version__>
-# \date		2020-09-14
+# \date		2020-11-15
 # \author	TishSerg (TishSerg@gmail.com) 
 ################################################################################
 
-__version__ = '0.1.1'
+__version__ = '0.2.dev'
 
 import asyncio
 import configparser
@@ -44,19 +44,8 @@ def load_config(filenames: Union[str, Iterable]):
             'NoncompressedBackupsLimit': '1'
         },
         'MainFilesToBackup': {
-            'Last Tabs': None,
-            'Preferences': None,
-            'Current Tabs': None,
-            'Local State': None,
-            'Bookmarks': None,
-            'Last Session': None,
-            'Current Session': None
         },
         'ExtraFilesToBackup': { # Usually heavy files
-            'History': None,
-            'BookmarksExtras': None,
-            'Favicons': None,
-            'Cookies': None
         }
     }
 
@@ -71,7 +60,7 @@ def load_config(filenames: Union[str, Iterable]):
             config.write(config_file)
         logging.critical(
             f"Config file wasn't found. A template config file '{filename}' has been created. " 
-            "Adjust it to your needs (at least specify path to browser's profile).")
+            "Adjust it to your needs (at least specify path to browser's profile and files to copy).")
         raise RuntimeError(f'Config file "{filename}" is not found.')
 
     if not config['Paths']['BrowserProfile']:
