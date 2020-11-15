@@ -273,6 +273,8 @@ async def main():
     buffer_hdlr = logging.handlers.MemoryHandler(10, logging.CRITICAL)
     logging.getLogger().addHandler(buffer_hdlr)
 
+    logging.info('Browsession v'+__version__+' is starting...')
+
     if os.getcwd().casefold() != sys.path[0].casefold() if os.name == 'nt' else os.getcwd() != sys.path[0]:
         logging.warning(f'Current dir ({os.getcwd()}) changed to script dir ({sys.path[0]})')
         os.chdir(sys.path[0])
@@ -303,6 +305,8 @@ async def main():
         logging.info('Opera is not running at Browsession startup. Making a backup...')
         make_backup(False)
     
+    logging.info('Browsession is on duty.')
+
     await asyncio.gather(
         browser_state_watcher(),
         emergency_watcher()
