@@ -107,13 +107,23 @@ def copy_profile(destination_path: str, include_extra: bool = False):
     files_to_copy = browser_profile_files.union(browser_profile_extra_files) if include_extra else browser_profile_files
     
     for filename in files_to_copy:
-        file_path = os.path.join(config['Paths']['BrowserProfile'], filename)
-        try:
-            copy_path = shutil.copy2(file_path, destination_path)
-        except PermissionError:
-            logging.warning(f'No access to "{file_path}"')
+        source_path = os.path.join(config['Paths']['BrowserProfile'], filename)
+        if os.path.isdir(source_path):
+            dir_basename = os.path.basename(source_path.rstrip(os.sep+(os.altsep if os.altsep else '')))
+            try:
+                copy_path = shutil.copytree(
+                    source_path, os.path.join(destination_path, dir_basename, ''),  # The '' is to add sep as dir indication
+                    symlinks=True, ignore=shutil.ignore_patterns('*.tmp'), dirs_exist_ok=False)
+            except OSError as errs:
+                for err in errs.args[0]:
+                    logging.warning(err[2])
         else:
-            logging.debug(f'Copied "{copy_path}"')
+            try:
+                copy_path = shutil.copy2(source_path, destination_path)
+            except PermissionError:
+                logging.warning(f'No access to "{source_path}"')
+            else:
+                logging.debug(f'Copied "{copy_path}"')
 
     logging.info(f'Profile copied: "{destination_path}"')
     
@@ -180,14 +190,19 @@ def remove_old_backups(skip_latest_full_count: int = 3, skip_latest_emergency_li
                     continue
             else:
                 remove(entry)
-            
-def check_profile_files_changed(backup_dir_path: str):
-    # filecmp.clear_cache()
-    match, mismatch, error = filecmp.cmpfiles(
-        config['Paths']['BrowserProfile'], 
-        backup_dir_path,
-        browser_profile_files.union(browser_profile_extra_files))
-    return len(mismatch) != 0 or len(match) == 0    # len(match) == 0 is here for case when backup_dir is empty (may be when backup drive ran out of free space)
+
+def dircmp_count_diff_files(directory: filecmp.dircmp) -> int:
+    diff_files_count = len(directory.diff_files)
+    for subdir in directory.subdirs.values():
+        diff_files_count += dircmp_count_diff_files(subdir)
+    return diff_files_count
+
+def check_profile_files_changed(backup_dir_path: str) -> bool:
+    # filecmp.clear_cache() # Looks like unnecessary
+    dir_cmp = filecmp.dircmp(config['Paths']['BrowserProfile'], backup_dir_path)
+    if not dir_cmp.common:
+        return True # For case when backup_dir is empty (may be when backup drive ran out of free space)
+    return dircmp_count_diff_files(dir_cmp) > 0
 
 def make_backup(emergency: bool):
     backup_tag = config['Settings']['EmergencyBackupTag'] if emergency else config['Settings']['FullBackupTag']
