@@ -7,6 +7,8 @@ It monitors and backups the session files so in case of disaster (eg. running ou
 
 Just make Browsession run in the background on logon (eg. using [NSSM](https://nssm.cc/) or whatever way you prefer) and stop worrying about your tabs.
 
+Also, Browsession can handle multiple browsers simultaneously. Just make a copy of Browsession dir with `browsession.ini` configured for a different browser and run its separate instance.
+
 Quick start
 -----------
 
