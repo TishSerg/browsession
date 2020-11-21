@@ -1,14 +1,16 @@
+#!/usr/bin/env python3
 ################################################################################
 # Browser Session SafeKeeper
 ################################################################################
 # Monitors and makes a backups of browser session.
-# \file		browsession.py
-# \version 	<see __version__>
-# \date		2020-11-15
-# \author	TishSerg (TishSerg@gmail.com) 
+# \file		    browsession.py
+# \version 	    <see __version__>
+# \date		    2020-11-21
+# \author	    TishSerg (TishSerg@gmail.com) 
+# \copyright    GNU GPL
 ################################################################################
 
-__version__ = '0.2.dev'
+__version__ = '0.2.0'
 
 import asyncio
 import configparser
@@ -33,6 +35,7 @@ def load_config(filenames: Union[str, Iterable]):
             'BackupDirsRoot': 'BrowsessionBackups'
         },
         'Settings': {
+            'BrowserStateDetection': 'Chromium',
             'BackupDirDatetimeFormat': '%Y-%m-%d %H-%M-%S',
             'FullBackupTag': 'regular',
             'EmergencyBackupTag': 'emergency',
@@ -51,6 +54,7 @@ def load_config(filenames: Union[str, Iterable]):
 
     global config
     config = configparser.ConfigParser(allow_no_value=True, interpolation=None, empty_lines_in_values=False)
+    config.optionxform = str    # Make option names case-sensitive
     config.read_dict(default_config)
     read_files = config.read(filenames)
     
@@ -69,34 +73,75 @@ def load_config(filenames: Union[str, Iterable]):
     config['Paths']['BrowserProfile'] = os.path.normpath(os.path.expandvars(config['Paths']['BrowserProfile']))
     config['Paths']['BackupDirsRoot'] = os.path.normpath(os.path.expandvars(config['Paths']['BackupDirsRoot']))
     
+    files_to_backup_valid_count = 0
+
     for opt_name, opt_value in config.items('MainFilesToBackup'):
         if opt_value and not config['MainFilesToBackup'].getboolean(opt_name):
             continue    # if file explicitly set to false - don't include it
         browser_profile_files.add(opt_name)
         full_path = os.path.join(config['Paths']['BrowserProfile'], opt_name)
-        if not os.path.exists(full_path):
-            logging.critical(f'In the browser profile main file "{opt_name}" is not found! ({full_path})')
-            raise RuntimeError(f'In the browser profile main file "{opt_name}" is not found! ({full_path})')
+        if os.path.exists(full_path):
+            files_to_backup_valid_count += 1
+    
+    if files_to_backup_valid_count < 1:
+        logging.critical(f"None main files/dirs found in {config['Paths']['BrowserProfile']}")
+        raise RuntimeError(f"None main files/dirs found in {config['Paths']['BrowserProfile']}")
         
     for opt_name, opt_value in config.items('ExtraFilesToBackup'):
         if opt_value and not config['ExtraFilesToBackup'].getboolean(opt_name):
             continue    # if file explicitly set to false - don't include it
         browser_profile_extra_files.add(opt_name)
+
+    logging.info(
+        'Backup config: "{}" -> "{}"'.format(
+            config['Paths']['BrowserProfile'], os.path.abspath(config['Paths']['BackupDirsRoot']))
+        )
     
 
-def check_opera_running() -> bool:
-    return os.path.exists(os.path.join(config['Paths']['BrowserProfile'], 'lockfile')) # Simple/Naive test
-    # session_file = os.path.join(config['Paths']['BrowserProfile'], 'Current Session')
-    # if not os.path.exists(session_file):
-    #     raise Exception(f'Browser Session file not found: {session_file}')
-    # try:
-    #     with open(src, 'rb') as fsrc:
-    #         pass
-    # except PermissionError:
-    #     return True
-    # else:
-    #     return False
-    
+def check_chromium_is_running_win() -> bool:
+    with os.scandir(os.path.join(config['Paths']['BrowserProfile'], 'Sessions')) as dir_entries:
+        for dir_entry in dir_entries:
+            if dir_entry.is_file():
+                try:
+                    with open(dir_entry.path, 'rb'):
+                        pass
+                except PermissionError:
+                    return True # Any locked file indicates browser is running (Windows only)
+    return False    # No locked files were encountered - browser isn't running (Windows only)
+
+def check_chromium_is_running() -> bool:
+    filepath = os.path.join(config['Paths']['BrowserProfile'], 'History-journal')
+    if not os.path.exists(filepath):
+        return False
+    else:
+        statinfo = os.stat(os.path.join(config['Paths']['BrowserProfile'], 'History-journal'))
+        return True if statinfo.st_size > 0 else False
+
+def check_firefox_is_running() -> bool:
+    return not os.path.exists(os.path.join(config['Paths']['BrowserProfile'], 'sessionstore.jsonlz4'))
+
+def check_opera_is_running_win() -> bool:
+    return os.path.exists(os.path.join(config['Paths']['BrowserProfile'], 'lockfile'))  # Windows only
+
+def check_opera_is_running() -> bool:
+    with os.scandir(config['Paths']['BrowserProfile']) as dir_entries:
+        for dir_entry in dir_entries:
+            if dir_entry.is_file() and dir_entry.name.startswith('ssdfp') and dir_entry.name.endswith('.lock'):
+                return True
+    return False
+
+def is_browser_running() -> bool:
+    check_browser_is_running = {
+        'Chromium-win'.casefold(): check_chromium_is_running_win,
+        'Chromium'.casefold(): check_chromium_is_running,
+        'Firefox'.casefold(): check_firefox_is_running,
+        'Opera-win'.casefold(): check_opera_is_running_win,
+        'Opera'.casefold(): check_opera_is_running,
+    }
+
+    return check_browser_is_running[config['Settings']['BrowserStateDetection'].casefold()]()
+
+
 def copy_profile(destination_path: str, include_extra: bool = False):
     try:
         os.mkdir(destination_path)
@@ -122,6 +167,8 @@ def copy_profile(destination_path: str, include_extra: bool = False):
                 copy_path = shutil.copy2(source_path, destination_path)
             except PermissionError:
                 logging.warning(f'No access to "{source_path}"')
+            except FileNotFoundError:
+                logging.warning(f'No such file or directory "{source_path}"')
             else:
                 logging.debug(f'Copied "{copy_path}"')
 
@@ -200,9 +247,11 @@ def dircmp_count_diff_files(directory: filecmp.dircmp) -> int:
 def check_profile_files_changed(backup_dir_path: str) -> bool:
     # filecmp.clear_cache() # Looks like unnecessary
     dir_cmp = filecmp.dircmp(config['Paths']['BrowserProfile'], backup_dir_path)
-    if not dir_cmp.common:
-        return True # For case when backup_dir is empty (may be when backup drive ran out of free space)
-    return dircmp_count_diff_files(dir_cmp) > 0
+
+    if not dir_cmp.common:  # For case when backup_dir is empty (may be when backup drive ran out of free space)
+        return True
+    
+    return dircmp_count_diff_files(dir_cmp) > 0 # Unreliable: if in backup_dir are only files that rarely change
 
 def make_backup(emergency: bool):
     backup_tag = config['Settings']['EmergencyBackupTag'] if emergency else config['Settings']['FullBackupTag']
@@ -228,16 +277,16 @@ def make_backup(emergency: bool):
             config['Settings'].getint('EmergencyBackupsStoreLimit'))
 
 def browser_start_handler():
-    logging.info('Opera just launched.')
+    logging.info('Browser just launched.')
 
 def browser_stop_handler():
-    logging.info('Opera just shutdown. Making a backup...')
+    logging.info('Browser just shutdown. Making a backup...')
     make_backup(False)
 
 async def emergency_watcher():
     while True:
         await asyncio.sleep(5)
-        if check_opera_running():
+        if is_browser_running():
             browser_profile_drive_usage = shutil.disk_usage(config['Paths']['BrowserProfile'])
             if browser_profile_drive_usage.free < eval(config['Settings']['EmergencyFreeSpaceTrigger']):
                 logging.warning('Browser profile drive free space is running out! ({:.1f} MiB remaining) Making emergency backup...'.format(browser_profile_drive_usage.free / 1024 / 1024))
@@ -246,17 +295,17 @@ async def emergency_watcher():
 
 
 async def browser_state_watcher():
-    opera_have_been_running = check_opera_running()
+    browser_have_been_running = is_browser_running()
     while True:
         await asyncio.sleep(1)
-        if check_opera_running():
-            if not opera_have_been_running:
+        if is_browser_running():
+            if not browser_have_been_running:
                 browser_start_handler()
-                opera_have_been_running = True
+                browser_have_been_running = True
         else:
-            if opera_have_been_running:
+            if browser_have_been_running:
                 browser_stop_handler()
-                opera_have_been_running = False
+                browser_have_been_running = False
 
 
 async def main():
@@ -282,7 +331,7 @@ async def main():
     os.makedirs('logs', exist_ok=True)
     logfile_hdlr = logging.handlers.TimedRotatingFileHandler(
         'logs/everything.log', backupCount=5, encoding='utf-8', when='midnight', atTime=datetime.time(hour=4))
-    logfile_fmt = logging.Formatter('[{asctime}] {levelname:8} {filename}:{lineno}: {message}', style='{')
+    logfile_fmt = logging.Formatter('[{asctime}] {levelname:8} {filename}:{lineno}:\t{message}', style='{')
     logfile_hdlr.setFormatter(logfile_fmt)
     logging.getLogger().addHandler(logfile_hdlr)
 
@@ -299,10 +348,10 @@ async def main():
 
     os.makedirs(config['Paths']['BackupDirsRoot'], exist_ok=True)
     
-    if check_opera_running():
-        logging.info('Opera is running at Browsession startup. Backup is skipped.')
+    if is_browser_running():
+        logging.info('Browser is running at Browsession startup. Backup is skipped.')
     else:
-        logging.info('Opera is not running at Browsession startup. Making a backup...')
+        logging.info('Browser is not running at Browsession startup. Making a backup...')
         make_backup(False)
     
     logging.info('Browsession is on duty.')
@@ -313,4 +362,7 @@ async def main():
     )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info('Browsession was stopped by user.')
